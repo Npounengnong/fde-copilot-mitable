@@ -10,7 +10,8 @@
     "build": "tsc -p .",
     "init": "tsx bin/init.ts",
     "serve": "tsx src/mcp/server.ts",
-    "typecheck": "tsc -p . --noEmit"
+    "typecheck": "tsc -p . --noEmit",
+    "test": "node --import tsx --test eval/carver/*.test.ts"
   },
   "dependencies": {
     "@hono/node-server": "^1.19.14",

@@ -17,6 +17,6 @@
     "noUncheckedIndexedAccess": true,
     "noImplicitOverride": true
   },
-  "include": ["src/**/*.ts", "bin/**/*.ts"],
+  "include": ["src/**/*.ts", "bin/**/*.ts", "eval/**/*.ts"],
   "exclude": ["node_modules", "dist", "data"]
 }
