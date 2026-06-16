@@ -61,6 +61,7 @@ import {
 } from "../store/granola-map.js";
 import { startScheduler, schedulerEnabled } from "../ingest/scheduler.js";
 import { startCommandCenter, commandCenterUrl } from "../web/server.js";
+import { scaffoldProductManual } from "../product/build-stub.js";
 
 const server = new Server(
   { name: "mitable", version: "0.1.0" },
@@ -326,6 +327,12 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         additionalProperties: false,
       },
     },
+    {
+      name: "scaffold_product_manual",
+      description:
+        "Create the directory tree at $MITABLE_HOME/product/ for canonical product knowledge (building blocks, pages) and write a README explaining how to populate it. Idempotent. Does NOT generate content — the Product Manual is intentionally manually authored.",
+      inputSchema: { type: "object", properties: {}, additionalProperties: false },
+    },
   ],
 }));
 
@@ -461,6 +468,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request: CallToolRequest)
         const url = await startCommandCenter({ port });
         return json({ url, already_running: false });
       }
+
+      case "scaffold_product_manual":
+        return json(scaffoldProductManual());
 
       default:
         return errorText(`unknown tool: ${name}`);

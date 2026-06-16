@@ -7,10 +7,9 @@
  *   1. Materialize the customer's current profile from the event log
  *   2. Group by profile_field
  *   3. Apply work-mode weights — sort sections, cap entries per section
- *   4. Render markdown matching the format in docs/06 §4
- *
- * Playbook + Product Manual sections are stubs in this milestone — they'll be
- * populated in milestone 9 (`src/playbook/load.ts`, `src/product/load.ts`).
+ *   4. Pull relevant Playbook entries for this mode (docs/08 §3)
+ *   5. Pull relevant Product Manual pages (docs/08 §4 — no-op until populated)
+ *   6. Render markdown matching the format in docs/06 §4
  */
 import { materializeProfile, type EventRow } from "../store/event-log.js";
 import { PROFILE_FIELDS, type ProfileField } from "../store/schema.js";
@@ -20,6 +19,8 @@ import {
   entryCapForWeight,
   type WorkMode,
 } from "./work-mode.js";
+import { loadPlaybookForMode, type PlaybookEntry } from "../playbook/load.js";
+import { loadProductForBrief, type ProductEntry } from "../product/load.js";
 
 export interface BriefOptions {
   customer_id: string;
@@ -55,7 +56,39 @@ export function renderBrief(opts: BriefOptions): string {
     lines.push("");
   }
 
+  // Layer 3 (Playbook). Empty when nothing's authored.
+  const playbookEntries = loadPlaybookForMode(
+    mode,
+    sections.map((s) => s.field),
+  );
+  if (playbookEntries.length > 0) {
+    lines.push("## Relevant Playbook");
+    for (const p of playbookEntries) {
+      lines.push(formatPlaybookEntry(p));
+    }
+    lines.push("");
+  }
+
+  // Layer 2 (Product Manual). Empty in v1 — the stub builder only scaffolds.
+  const productEntries = loadProductForBrief();
+  if (productEntries.length > 0) {
+    lines.push("## Relevant Product Knowledge");
+    for (const p of productEntries) {
+      lines.push(formatProductEntry(p));
+    }
+    lines.push("");
+  }
+
   return lines.join("\n");
+}
+
+function formatPlaybookEntry(p: PlaybookEntry): string {
+  return `- **${p.category} — ${p.title}** (${p.path})\n  ${p.body_excerpt.split("\n")[0] ?? ""}`;
+}
+
+function formatProductEntry(p: ProductEntry): string {
+  const tag = p.kind === "building-block" ? `building-block · ${p.category ?? ""}` : "page";
+  return `- **${p.title}** (${tag}) — ${p.path}`;
 }
 
 function groupByField(rows: EventRow[]): Map<ProfileField, EventRow[]> {
