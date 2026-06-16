@@ -1,0 +1,10 @@
+# Stability Risks — Acme Bakery
+
+## SR-001: Allergy Sheet Drift
+The allergy sync (WA-001) breaks silently when the head baker renames a column. No alerting. Customers get stale or missing allergen info, which is a safety risk for a food business. Highest-severity item on this account.
+
+## SR-002: Stripe API Version Pinning
+Workflow uses Stripe API version 2023-10-16. Stripe deprecates older versions yearly. Upgrade has been deferred twice; window closes mid-2026.
+
+## SR-003: KB Manually Tagged
+Each new KB article needs to be manually tagged with intent categories. Acme's marketing team writes the articles; nobody is owning the tagging step.

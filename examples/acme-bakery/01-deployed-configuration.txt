@@ -1,0 +1,23 @@
+# Deployed Configuration — Acme Bakery
+
+Last Updated: 2026-04-12
+
+## Support Stack
+- Primary channel: Web chat widget on acme-bakery.example
+- Backend: ExampleCo Chat with native Stripe integration for order lookups
+- KB: 28 articles, synced nightly
+
+## Active Workflows
+1. Order status lookup (Stripe order ID → status)
+2. Refund eligibility check (auto-approved under $20, escalated above)
+3. Hours / location lookup (12 store locations)
+4. Allergy / ingredient lookup (linked to product catalog)
+
+## Excluded from auto-response
+- Anything tagged `complaint`
+- Customers with > 2 prior escalations in last 30 days
+
+## Settings
+- Confidence threshold: 0.7
+- Auto-close after 6h of customer silence
+- Language: EN only

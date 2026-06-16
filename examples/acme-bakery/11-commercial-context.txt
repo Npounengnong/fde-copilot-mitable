@@ -1,0 +1,18 @@
+# Commercial Context — Acme Bakery
+
+## Contract
+- ACV: $24,000
+- Term: 12 months (January 2026 – January 2027)
+- Renewal: January 2027
+- Negotiated by: Riya directly, no procurement team
+
+## Renewal Outlook
+Low risk. Riya is satisfied; CSAT is over target; AI resolution rate is trending up. Main watch item is the allergy sheet incident (SR-001) — one repeat would erode trust quickly. OC-001 (alerting) addresses it.
+
+## Expansion Opportunities
+1. **Square integration** — closes CG-001, adds ~12% to resolution rate. Would justify ACV bump.
+2. **Multi-location routing** — closes CG-002, smaller revenue impact but high customer-experience win.
+3. **Second-brand support** — Riya mentioned acquiring a sister bakery brand. Six months out, but flag at next sync.
+
+## Pricing Sensitivity
+Small business. Any ACV bump needs to map to clear new value (closing a capability gap), not "more of the same."

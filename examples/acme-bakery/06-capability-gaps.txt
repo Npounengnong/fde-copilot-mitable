@@ -1,0 +1,10 @@
+# Capability Gaps — Acme Bakery
+
+## CG-001: No Square POS Integration
+We can't read per-customer purchase history or loyalty tier from Acme's POS (Square). Customer support questions about "how many points do I have?" or "what's my Gold-member limit?" can't be answered by AI. Currently a ~12% escalation driver.
+
+## CG-002: No Multi-Location Routing
+A customer asking "is the downtown store open today?" gets the chain-wide hours response, not the per-location info. Acme has 12 locations with different hours. Workflow needs a location-disambiguation step we haven't built.
+
+## CG-003: No Image Understanding
+A surprising number of customers send photos ("is this expired?") that we can't process. They escalate. Not on the near-term roadmap.

@@ -1,0 +1,17 @@
+# Change Log — Acme Bakery
+
+Most recent first.
+
+## 2026-04-10
+**KB sync: 3 articles added on the new seasonal menu.** Tagged before sync.
+
+## 2026-03-22
+**Refund cap raised $15 → $20.** Driven by Q1 refund-volume data. Validated against held-out set before applying.
+
+## 2026-02-14
+**Auto-close timeout reduced 12h → 6h.** Owner asked for faster resolution metrics. Customers reopening after timeout: 4% (within tolerance).
+
+## 2026-01-08
+**Go-live.**
+Workflows: order lookup, refund eligibility, hours/location, allergy/ingredient.
+Settings: confidence 0.7, refund cap $15, auto-close 12h.

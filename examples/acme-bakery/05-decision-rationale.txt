@@ -1,0 +1,10 @@
+# Decision Rationale — Acme Bakery
+
+## DR-001: Confidence Threshold 0.7 (not the default 0.55)
+Food-safety adjacent topics (allergens, ingredients) carry real consequences if AI is confidently wrong. Higher threshold trades volume for accuracy. Acme's owner explicitly preferred this trade.
+
+## DR-002: No Voice Channel
+Phone support is intentional human-only. The owner wants voice to feel personal — branding decision, not technical. We agreed not to propose voice AI in renewal conversations.
+
+## DR-003: Hardcoded Refund Cap (vs. Per-Customer Tier Lookup)
+A proper per-customer cap would need integration with Acme's POS (Square). The owner deprioritized that work twice. We documented the workaround (WA-002) and moved on. Acceptable for now because the customer mix is dominated by single-purchase visitors.

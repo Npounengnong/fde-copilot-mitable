@@ -29,7 +29,8 @@ import { resolve } from "node:path";
 
 import { renderBrief } from "../assembly/brief.js";
 import { parseMode, WORK_MODES } from "../assembly/work-mode.js";
-import { listCustomers } from "../store/event-log.js";
+import { appendEvent, ensureCustomer, listCustomers } from "../store/event-log.js";
+import { PROFILE_FIELDS, type ProfileField } from "../store/schema.js";
 import { seedFixture } from "../store/seed-fixture.js";
 import {
   listPending,
@@ -64,7 +65,7 @@ import { startCommandCenter, commandCenterUrl } from "../web/server.js";
 import { scaffoldProductManual } from "../product/build-stub.js";
 
 const server = new Server(
-  { name: "mitable", version: "0.1.0" },
+  { name: "mitable", version: "0.1.1" },
   { capabilities: { tools: {} } },
 );
 
@@ -131,6 +132,56 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       name: "list_customers",
       description: "List customers currently known to the event log.",
       inputSchema: { type: "object", properties: {}, additionalProperties: false },
+    },
+    {
+      name: "add_customer",
+      description:
+        "Create a customer in the event log so /mitable <customer> has somewhere to write. Idempotent — calling on an existing customer is a no-op. Use this before sweeping Slack/Granola or pasting notes for a new customer.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          customer_id: {
+            type: "string",
+            description: "Short slug, e.g. 'acme-bakery'. Used in /mitable <id>.",
+          },
+          display_name: {
+            type: "string",
+            description: "Human-readable name shown in the brief header. Defaults to the customer_id.",
+          },
+          one_liner: {
+            type: "string",
+            description: "Optional short description shown in the command center.",
+          },
+        },
+        required: ["customer_id"],
+        additionalProperties: false,
+      },
+    },
+    {
+      name: "add_note",
+      description:
+        "Write a single profile entry to the event log directly. Use when the FDE wants to record something they observed manually — a meeting takeaway, a quick fact a customer mentioned, a config detail from a deploy. The content is treated as 'fde_manual' provenance (no evidence quote required, dedup skipped). NOT a classifier path — for that, use drain_classifications or sweep_now.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          customer_id: { type: "string", description: "Must already exist (use add_customer first)." },
+          profile_field: {
+            type: "string",
+            enum: [...PROFILE_FIELDS],
+            description: "Which of the eleven Customer Profile fields this entry belongs to.",
+          },
+          content: {
+            type: "string",
+            description: "One-sentence self-contained assertion. Will be shown verbatim in briefs.",
+          },
+          confidence: {
+            type: "number",
+            description: "0.0–1.0. Defaults to 1.0 for FDE-authored notes. Must be ≥ 0.7 to write.",
+          },
+        },
+        required: ["customer_id", "profile_field", "content"],
+        additionalProperties: false,
+      },
     },
     {
       name: "list_pending_classifications",
@@ -343,7 +394,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request: CallToolRequest)
   try {
     switch (name) {
       case "ping":
-        return text("pong — mitable 0.1.0");
+        return text("pong — mitable 0.1.1");
 
       case "brief": {
         const customer = requireString(args, "customer");
@@ -364,6 +415,44 @@ server.setRequestHandler(CallToolRequestSchema, async (request: CallToolRequest)
 
       case "list_customers": {
         return json(listCustomers());
+      }
+
+      case "add_customer": {
+        const customer_id = requireString(args, "customer_id");
+        const display_name =
+          typeof args.display_name === "string" && args.display_name !== ""
+            ? args.display_name
+            : customer_id;
+        const one_liner = typeof args.one_liner === "string" ? args.one_liner : null;
+        ensureCustomer(customer_id, display_name, one_liner);
+        return json({ customer_id, display_name, one_liner });
+      }
+
+      case "add_note": {
+        const customer_id = requireString(args, "customer_id");
+        const profile_field = requireString(args, "profile_field");
+        const content = requireString(args, "content");
+        const confidence = typeof args.confidence === "number" ? args.confidence : 1.0;
+
+        if (!(PROFILE_FIELDS as readonly string[]).includes(profile_field)) {
+          return errorText(
+            `unknown profile_field: ${profile_field}. Must be one of: ${PROFILE_FIELDS.join(", ")}`,
+          );
+        }
+
+        const result = appendEvent({
+          customer_id,
+          profile_field: profile_field as ProfileField,
+          content,
+          source_type: "fde_manual",
+          source_ref: `note:${Date.now()}`,
+          source_url: null,
+          evidence_text: "",
+          confidence,
+          origin_ts: Date.now(),
+          provenance: "fde_reported",
+        });
+        return json(result);
       }
 
       case "list_pending_classifications": {

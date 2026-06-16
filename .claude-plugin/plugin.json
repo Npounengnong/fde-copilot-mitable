@@ -1,6 +1,6 @@
 {
   "name": "mitable",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Customer, product, and operating context for Forward Deployed Engineers — automatically maintained, automatically loaded.",
   "author": {
     "name": "Mitable"
@@ -8,6 +8,7 @@
   "license": "Apache-2.0",
   "keywords": ["fde", "customer-context", "claude-code", "plugin"],
   "commands": [
-    "./commands/mitable.md"
+    "./commands/mitable.md",
+    "./commands/mitable-get-started.md"
   ]
 }

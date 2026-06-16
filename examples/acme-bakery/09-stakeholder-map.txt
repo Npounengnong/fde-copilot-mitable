@@ -1,0 +1,10 @@
+# Stakeholder Map — Acme Bakery
+
+## Riya Patel — Owner / CEO
+Primary contact. Day-to-day decisions. Cares about brand more than metrics — frame upgrades in terms of "customer experience" not "deflection rate." Hands-off on technical detail. Responds within 24h to email; faster on text.
+
+## Marcus Liu — Head Baker (Allergy Sheet Owner)
+Maintains the source of truth for allergens (WA-001). Friendly but not technical. Don't ask him to change tooling. Sync changes through Riya.
+
+## Two part-time customer-service agents (unnamed)
+Handle escalated conversations. Sentiment toward AI: positive — fewer late-night messages reach them since AI handles store-hours queries.

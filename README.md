@@ -2,55 +2,121 @@
 
 A Claude Code plugin that gives AI agents the same customer, product, and operating context as a staff Forward Deployed Engineer.
 
+The idea: an FDE supports many accounts, each with different configs, integrations, stakeholders, commitments, and history. Mitable maintains that context per customer so every Claude session starts informed — no manual recap, no scattered Slack/Granola lookup.
+
 See [docs/](docs/) for the full product spec. Start with [docs/01-overview.md](docs/01-overview.md).
 
-## Status
-
-v0.1.0 — through milestone 4. The MCP server is running with `ping`, `brief`, `seed_fixture`, and `list_customers` tools. The `/mitable <customer>` slash command is wired to the `mitable-load-context` skill. Remaining milestones: session-end hook, Slack ingest, Granola ingest, command center web UI, Playbook/Product loaders, eval harness.
-
-## Install (local development)
-
-```sh
-# clone the repo, then:
-cd fde-copilot-mitable
-npm install
-npm run typecheck
-```
-
-The plugin is registered via `.mcp.json` at the repo root. To load it into Claude Code, point Claude Code at this directory as a local plugin source (instructions depend on Claude Code's plugin-management UI / CLI).
-
-On first invocation `start.sh` will:
-
-1. `npm install` if `node_modules/` is missing
-2. Run `bin/init.ts` to create `~/.mitable/` (or `$MITABLE_HOME` if set)
-3. `exec` the MCP server (`src/mcp/server.ts`)
-
-## Verify the skeleton loaded
-
-From a Claude Code session, call the Mitable MCP `ping` tool. Expected response: `pong — mitable 0.1.0`.
-
-## Try the Carver fixture (milestones 3 + 4)
-
-1. Make sure `refs/carver-customer-profile/` is present (it ships in this repo, gitignored to keep design refs separate).
-2. From a Claude Code session, call the `seed_fixture` MCP tool with `{ "path": "refs/carver-customer-profile" }`. Expect `{ "customer_id": "carver", "written": 11, "skipped": [...] }`.
-3. Run `/mitable carver` (or `/mitable carver --mode implement`). The skill calls `brief` under the hood and tells you `Loaded carver · mode: investigate.`
-4. Ask Claude anything Carver-specific. The brief is now session context — answers should reference Carver's actual workarounds, risks, and commitments.
-
-## Layout
+## Install
 
 ```
-.claude-plugin/plugin.json    plugin manifest
-.mcp.json                     MCP server registration
-start.sh                      bootstrap + exec
-bin/init.ts                   one-shot setup of ~/.mitable/
-commands/mitable.md           /mitable slash command (routes to skills)
-skills/                       skills the agent invokes
-src/mcp/server.ts             the long-running MCP server
-src/store/                    SQLite event log + fixture loader
-src/assembly/                 work-mode weights + brief renderer
-docs/                         canonical product spec
-refs/                         original design references (gitignored)
+/plugin marketplace add Febchuk/fde-copilot-mitable
+/plugin install mitable@mitable
 ```
+
+Restart Claude Code so it picks up the new MCP server, hooks, and skills.
+
+**Prereqs:** Node 20+, npm, and a C++ toolchain (Xcode CLT on macOS, build-essential on Linux). `start.sh` self-heals the native `better-sqlite3` binding on first run.
+
+## First-run walkthrough
+
+```
+/mitable-get-started
+```
+
+This loads an example customer (a fictional bakery — see [`examples/acme-bakery/`](examples/acme-bakery/)), renders a brief, and shows you how to add your own customer. Takes about a minute.
+
+## Day-to-day usage
+
+```
+/mitable <customer>             # load that customer's profile into the session
+/mitable <customer> --mode implement     # default mode is 'investigate'
+/mitable                        # open the command center web UI (sources, queue, profiles)
+```
+
+After `/mitable <customer>`, Claude has the customer's deployed configuration, active workarounds, stability risks, outstanding commitments, stakeholders, and commercial context as background knowledge. Ask anything customer-specific — answers reference the brief.
+
+## Adding your own customers
+
+Two paths:
+
+**Manual (works today, no setup):**
+
+Call the Mitable MCP tools from any Claude Code session:
+
+```
+add_customer({"customer_id": "acme", "display_name": "Acme Inc", "one_liner": "..."})
+add_note({"customer_id": "acme", "profile_field": "Stability Risks", "content": "..."})
+```
+
+The `add_note` tool writes directly to the event log under `fde_manual` provenance. Useful for capturing things you already know without waiting for ingestion.
+
+**Automatic (Slack + Granola):**
+
+The auto-ingestion path is wired and tested end-to-end (`/mitable` no-arg → Sources → add channel/meeting → 5-min scheduler). **But v0.1 ships with stub adapters that return "no new messages."** A real adapter that proxies to your installed Slack/Granola MCPs is the next major piece of work. Until then, treat ingestion as planned-but-not-shipped.
+
+See [docs/07-scan-and-store.md](docs/07-scan-and-store.md) for the contract the real adapter will satisfy.
+
+## What it looks like
+
+When `/mitable acme-bakery` runs, the brief injected into your session looks like:
+
+```markdown
+# Customer Context: Acme Bakery
+
+_Mode: investigate_
+
+## Deployed Configuration
+- # Deployed Configuration — Acme Bakery ...
+
+## Active Workarounds
+- WA-001: Manual allergy sync via Google Sheet ...
+
+## Stability Risks
+- SR-001: Allergy sheet drift — highest severity ...
+
+...
+```
+
+Section order is decided by the work mode you pass — INVESTIGATE puts Stability Risks / Deployed Configuration / Active Workarounds first; future modes (Renewal-Prep, Onboarding) will weight differently. See [docs/05-playbook.md](docs/05-playbook.md).
+
+## Verify install
+
+From a Claude Code session, call the Mitable MCP `ping` tool. Expected: `pong — mitable 0.1.1`.
+
+## Architecture
+
+```
+.claude-plugin/
+  plugin.json                manifest
+  marketplace.json           tells Claude Code where the plugin lives
+  hooks.json                 SessionEnd → hooks/session-end.mjs
+.mcp.json                    registers Mitable MCP via start.sh
+start.sh                     bootstrap + exec, self-heals native modules
+bin/init.ts                  one-shot setup of ~/.mitable/
+commands/                    /mitable, /mitable-get-started
+skills/                      load-context, command-center,
+                             get-started, build-product-manual
+hooks/session-end.mjs        queues sessions for classification
+src/
+  mcp/server.ts              MCP server: ~22 tools
+  store/                     SQLite event log, dedup, channel + meeting maps
+  ingest/                    Slack + Granola scan paths, scheduler
+  classify/transcript.ts     session transcript classifier (claude -p)
+  assembly/                  work-mode weights + brief renderer
+  playbook/, product/        Layer 2 + Layer 3 loaders
+  web/                       Hono command-center
+docs/                        canonical product spec (11 files)
+examples/                    canned customer fixtures
+eval/carver/                 17-assertion test suite
+```
+
+## Tests
+
+```
+npm test
+```
+
+Assertions against both the Carver fixture (kept in `refs/`, gitignored — internal worked example) and the public example at `examples/acme-bakery/`.
 
 ## License
 

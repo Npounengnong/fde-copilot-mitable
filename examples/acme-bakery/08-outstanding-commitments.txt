@@ -1,0 +1,17 @@
+# Outstanding Commitments — Acme Bakery
+
+## OC-001: Fix Allergy Sheet Alerting
+**Commitment:** Add a daily check that the allergy sheet's column schema matches expected. Email FDE if drift detected.
+**Owner:** FDE
+**Due:** 2026-05-15
+**Source:** Internal review after Feb 2026 incident.
+
+## OC-002: Recalibrate Confidence Threshold
+**Commitment:** With 28 articles (up from 18 at launch), re-evaluate whether 0.7 is still right. Run eval set.
+**Owner:** FDE
+**Due:** 2026-06-30
+
+## OC-003: Scope Square Integration
+**Commitment:** Talk to Square partnership team about API access for per-customer purchase history. Report back to owner.
+**Owner:** Partner Engineering
+**Due:** End Q3 2026

@@ -1,0 +1,15 @@
+# Active Workarounds — Acme Bakery
+
+## WA-001: Manual Allergy Sync
+**What it is:** Allergy / ingredient data lives in a Google Sheet maintained by the head baker. A nightly Zap copies the sheet to a JSON file the AI reads.
+
+**What it compensates for:** Acme doesn't have a structured product DB. Building one is on their roadmap but not committed.
+
+**Fragility:** If the sheet structure changes (column rename), the Zap silently breaks. Has happened once (Feb 2026).
+
+## WA-002: Refund Cap Hardcoded
+**What it is:** Auto-refund cap is $20, set in workflow config. Originally agreed verbally with the owner.
+
+**What it compensates for:** No clean way to fetch each customer's loyalty-tier limit from their POS. Hardcoded value approximates the most-generous tier.
+
+**Note:** Three loyal customers ("Gold members") have higher limits and currently get escalated more often than necessary.

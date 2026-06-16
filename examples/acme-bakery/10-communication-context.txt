@@ -1,0 +1,17 @@
+# Communication Context — Acme Bakery
+
+## With Riya (Owner)
+Lead with the customer's experience, not metrics. "We're saving the late-night customers a wait" lands better than "deflection rate is 59%." She still appreciates numbers but in the second paragraph, not the first.
+
+Don't propose features. Describe a customer pain point, then ask if she's seeing it.
+
+Avoid the word "deflection" — sounds dismissive of customers. Say "resolved by AI" instead.
+
+## Sensitive topic — Voice / phone support
+She has explicitly said phone stays human-only. Don't propose voice AI even when it would obviously help. See DR-002.
+
+## Channel preference
+Text > email > phone. Phone only for incidents.
+
+## Cadence
+Monthly 30-min sync. No QBR formality. Keep updates terse.
