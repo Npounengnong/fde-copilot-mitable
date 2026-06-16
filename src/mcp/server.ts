@@ -53,6 +53,8 @@ import { sweepSlack } from "../ingest/slack.js";
 import { StubSlackClient } from "../ingest/slack-adapter.js";
 import { sweepGranola } from "../ingest/granola.js";
 import { StubGranolaClient } from "../ingest/granola-adapter.js";
+import { RealGranolaClient } from "../ingest/granola-real.js";
+import { saveGranolaAuth } from "../store/granola-auth.js";
 import {
   addMeeting,
   listMeetings,
@@ -384,6 +386,22 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         "Create the directory tree at $MITABLE_HOME/product/ for canonical product knowledge (building blocks, pages) and write a README explaining how to populate it. Idempotent. Does NOT generate content — the Product Manual is intentionally manually authored.",
       inputSchema: { type: "object", properties: {}, additionalProperties: false },
     },
+    {
+      name: "set_granola_token",
+      description:
+        "Store the user's Granola API key so the real Granola adapter can fetch meeting notes. The user generates this key in the Granola app (Settings -> Connectors -> API Keys). Key format: grn_...",
+      inputSchema: {
+        type: "object",
+        properties: {
+          token: {
+            type: "string",
+            description: "Granola API key, e.g. grn_abc123. Must start with 'grn_'.",
+          },
+        },
+        required: ["token"],
+        additionalProperties: false,
+      },
+    },
   ],
 }));
 
@@ -514,8 +532,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request: CallToolRequest)
           customer_id: customer,
           dry_run: dryRun,
         });
+        const granolaClient = process.env.MITABLE_GRANOLA_ADAPTER === "real" ? new RealGranolaClient() : new StubGranolaClient();
         const granola = await sweepGranola({
-          client: new StubGranolaClient(),
+          client: granolaClient,
           customer_id: customer,
           dry_run: dryRun,
         });
@@ -560,6 +579,15 @@ server.setRequestHandler(CallToolRequestSchema, async (request: CallToolRequest)
 
       case "scaffold_product_manual":
         return json(scaffoldProductManual());
+
+      case "set_granola_token": {
+        const token = requireString(args, "token");
+        if (!token.startsWith("grn_")) {
+          return errorText("Token must start with 'grn_'. Get yours from Granola -> Settings -> Connectors -> API Keys.");
+        }
+        saveGranolaAuth(token);
+        return text("Granola token stored. Run sweep_now to test.");
+      }
 
       default:
         return errorText(`unknown tool: ${name}`);
@@ -654,7 +682,9 @@ async function main() {
   process.stderr.write("[mitable] mcp server ready\n");
 
   if (schedulerEnabled()) {
+    const granolaClient = process.env.MITABLE_GRANOLA_ADAPTER === "real" ? new RealGranolaClient() : new StubGranolaClient();
     const handle = startScheduler({
+      granola_client: granolaClient,
       on_tick: (r) =>
         process.stderr.write(
           `[mitable] scheduler tick: slack(ch=${r.slack.channels_examined} wr=${r.slack.extractions_written}) granola(mt=${r.granola.meetings_examined} wr=${r.granola.extractions_written}) errs=${r.slack.errors.length + r.granola.errors.length}\n`,
