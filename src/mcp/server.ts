@@ -2,13 +2,13 @@
  * Mitable MCP server.
  *
  * v1 surface (this file grows with each milestone):
- *   - ping                   — sanity check (milestone 2)
- *   - brief                  — milestone 3, this file
- *   - seed_fixture           — milestone 3, this file
- *   - list_customers         — milestone 3, this file
- *   - profile_read/write     — milestone 5
- *   - sweep_now              — milestone 6
- *   - open_command_center    — milestone 8
+ *   - ping                              — milestone 2
+ *   - brief, seed_fixture, list_customers — milestone 3
+ *   - list_pending_classifications,
+ *     drain_classifications,
+ *     classify_one_session              — milestone 5 (this file)
+ *   - sweep_now                         — milestone 6
+ *   - open_command_center               — milestone 8
  *
  * Anything written to stdout is MCP protocol traffic — logs go to stderr.
  */
@@ -25,6 +25,16 @@ import { renderBrief } from "../assembly/brief.js";
 import { parseMode, WORK_MODES } from "../assembly/work-mode.js";
 import { listCustomers } from "../store/event-log.js";
 import { seedFixture } from "../store/seed-fixture.js";
+import {
+  listPending,
+  markFailed,
+  markInProgress,
+  markDone,
+  markSkipped,
+  queueCounts,
+  type QueueRow,
+} from "../store/classify-queue.js";
+import { classifyTranscript } from "../classify/transcript.js";
 
 const server = new Server(
   { name: "mitable", version: "0.1.0" },
@@ -95,6 +105,62 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       description: "List customers currently known to the event log.",
       inputSchema: { type: "object", properties: {}, additionalProperties: false },
     },
+    {
+      name: "list_pending_classifications",
+      description:
+        "Show sessions queued by the SessionEnd hook that are waiting to be classified into the event log. Returns the rows plus aggregate queue counts (pending/in_progress/done/failed/skipped).",
+      inputSchema: {
+        type: "object",
+        properties: {
+          limit: {
+            type: "number",
+            description: "Max rows to return. Defaults to 20.",
+          },
+        },
+        additionalProperties: false,
+      },
+    },
+    {
+      name: "classify_one_session",
+      description:
+        "Classify a single queued session and write high-confidence extractions to the event log. Spawns `claude -p` with the classifier prompt. Requires the customer_id (either passed inline or set on the queue row by an earlier /mitable invocation).",
+      inputSchema: {
+        type: "object",
+        properties: {
+          session_id: {
+            type: "string",
+            description: "Queue row to classify. Must exist with status='pending'.",
+          },
+          customer_id: {
+            type: "string",
+            description:
+              "Customer to attribute extractions to. Overrides the queue row's customer_id_hint.",
+          },
+        },
+        required: ["session_id"],
+        additionalProperties: false,
+      },
+    },
+    {
+      name: "drain_classifications",
+      description:
+        "Process the pending-classification queue. For each row that has a resolvable customer_id (from the queue row or the customer_id param), spawn `claude -p` and write extractions. Returns per-session results. v1: sequential, manual. The scheduler in milestone 6 will call this automatically.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          customer_id: {
+            type: "string",
+            description:
+              "If set, applied to every pending row whose customer_id_hint is empty. Use when draining a batch you know belongs to one customer.",
+          },
+          limit: {
+            type: "number",
+            description: "Max rows to process this call. Defaults to 5.",
+          },
+        },
+        additionalProperties: false,
+      },
+    },
   ],
 }));
 
@@ -128,6 +194,30 @@ server.setRequestHandler(CallToolRequestSchema, async (request: CallToolRequest)
         return json(listCustomers());
       }
 
+      case "list_pending_classifications": {
+        const limit = typeof args.limit === "number" ? args.limit : 20;
+        return json({ counts: queueCounts(), rows: listPending(limit) });
+      }
+
+      case "classify_one_session": {
+        const sessionId = requireString(args, "session_id");
+        const customer = typeof args.customer_id === "string" ? args.customer_id : undefined;
+        const row = findPendingRow(sessionId);
+        const result = await classifyOne(row, customer);
+        return json(result);
+      }
+
+      case "drain_classifications": {
+        const customer = typeof args.customer_id === "string" ? args.customer_id : undefined;
+        const limit = typeof args.limit === "number" ? args.limit : 5;
+        const rows = listPending(limit);
+        const results = [];
+        for (const row of rows) {
+          results.push(await classifyOne(row, customer));
+        }
+        return json({ processed: results.length, results });
+      }
+
       default:
         return errorText(`unknown tool: ${name}`);
     }
@@ -154,6 +244,65 @@ function requireString(args: Record<string, unknown>, key: string): string {
     throw new Error(`missing required argument: ${key}`);
   }
   return v;
+}
+
+function findPendingRow(sessionId: string): QueueRow | null {
+  const rows = listPending(10_000);
+  return rows.find((r) => r.session_id === sessionId) ?? null;
+}
+
+type ClassifyOneResult =
+  | { session_id: string; status: "skipped"; reason: string }
+  | { session_id: string; status: "failed"; reason: string }
+  | {
+      session_id: string;
+      status: "done";
+      customer_id: string;
+      task_type: string | null;
+      outcome: string | null;
+      extractions_written: number;
+      extractions_rejected: number;
+    };
+
+async function classifyOne(
+  row: QueueRow | null,
+  customerOverride: string | undefined,
+): Promise<ClassifyOneResult> {
+  if (!row) {
+    return { session_id: "", status: "skipped", reason: "row_not_found" };
+  }
+  const customerId = customerOverride ?? row.customer_id_hint ?? null;
+  if (!customerId) {
+    markSkipped(row.session_id, "no_customer_id");
+    return { session_id: row.session_id, status: "skipped", reason: "no_customer_id" };
+  }
+  if (!row.transcript_path) {
+    markSkipped(row.session_id, "no_transcript_path");
+    return { session_id: row.session_id, status: "skipped", reason: "no_transcript_path" };
+  }
+
+  markInProgress(row.session_id);
+  try {
+    const result = await classifyTranscript({
+      session_id: row.session_id,
+      transcript_path: row.transcript_path,
+      customer_id: customerId,
+    });
+    markDone(row.session_id);
+    return {
+      session_id: row.session_id,
+      status: "done",
+      customer_id: result.customer_id,
+      task_type: result.task_type,
+      outcome: result.outcome,
+      extractions_written: result.extractions_written,
+      extractions_rejected: result.extractions_rejected,
+    };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    markFailed(row.session_id, msg);
+    return { session_id: row.session_id, status: "failed", reason: msg };
+  }
 }
 
 async function main() {

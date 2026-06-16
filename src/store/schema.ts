@@ -99,6 +99,23 @@ CREATE INDEX IF NOT EXISTS events_origin_ts_idx
   ON events(origin_ts);
 `;
 
+const SCHEMA_V2 = `
+CREATE TABLE IF NOT EXISTS pending_classifications (
+  session_id        TEXT PRIMARY KEY,
+  transcript_path   TEXT,                          -- nullable: we may not always find one
+  customer_id_hint  TEXT,                          -- from CWD or skill invocation, best-effort
+  cwd               TEXT,
+  queued_at         INTEGER NOT NULL,
+  status            TEXT NOT NULL,                 -- 'pending' | 'in_progress' | 'done' | 'failed' | 'skipped'
+  attempts          INTEGER NOT NULL DEFAULT 0,
+  last_error        TEXT,
+  completed_at      INTEGER
+);
+
+CREATE INDEX IF NOT EXISTS pending_classifications_status_idx
+  ON pending_classifications(status, queued_at);
+`;
+
 let cached: DB | undefined;
 
 export function openDb(): DB {
@@ -119,6 +136,10 @@ function migrate(db: DB): void {
   if (current < 1) {
     db.exec(SCHEMA_V1);
     db.pragma("user_version = 1");
+  }
+  if (current < 2) {
+    db.exec(SCHEMA_V2);
+    db.pragma("user_version = 2");
   }
 }
 
