@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "mitable": {
+      "command": "${CLAUDE_PLUGIN_ROOT}/start.sh",
+      "args": []
+    }
+  }
+}
