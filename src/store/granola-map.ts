@@ -135,6 +135,14 @@ export function getMeetingWatermark(meeting_id: string): MeetingWatermark {
   return loadWatermarks().meetings[meeting_id] ?? { watermark_ts: 0, last_sweep: 0 };
 }
 
+/** Most-recent last_sweep timestamp across all meetings, for the status header. */
+export function lastMeetingSweep(): number | null {
+  const all = loadWatermarks().meetings;
+  let max = 0;
+  for (const m of Object.values(all)) if (m.last_sweep > max) max = m.last_sweep;
+  return max === 0 ? null : max;
+}
+
 export function advanceMeetingWatermark(meeting_id: string, newest_ts: number): void {
   const all = loadWatermarks();
   const existing = all.meetings[meeting_id] ?? { watermark_ts: 0, last_sweep: 0 };

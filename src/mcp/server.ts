@@ -60,6 +60,7 @@ import {
   resumeMeeting,
 } from "../store/granola-map.js";
 import { startScheduler, schedulerEnabled } from "../ingest/scheduler.js";
+import { startCommandCenter, commandCenterUrl } from "../web/server.js";
 
 const server = new Server(
   { name: "mitable", version: "0.1.0" },
@@ -310,6 +311,21 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         additionalProperties: false,
       },
     },
+    {
+      name: "open_command_center",
+      description:
+        "Start the local command-center web UI (if not already running) and return its URL. The /mitable (no-arg) skill calls this and then asks the user to open the URL in a browser. Bound to 127.0.0.1.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          port: {
+            type: "number",
+            description: "Optional fixed port. Defaults to OS-assigned (0).",
+          },
+        },
+        additionalProperties: false,
+      },
+    },
   ],
 }));
 
@@ -436,6 +452,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request: CallToolRequest)
       case "remove_meeting": {
         const ok = removeMeeting(requireString(args, "meeting_id"));
         return text(ok ? `removed: ${args.meeting_id}` : `not found: ${args.meeting_id}`);
+      }
+
+      case "open_command_center": {
+        const existing = commandCenterUrl();
+        if (existing) return json({ url: existing, already_running: true });
+        const port = typeof args.port === "number" ? args.port : undefined;
+        const url = await startCommandCenter({ port });
+        return json({ url, already_running: false });
       }
 
       default:

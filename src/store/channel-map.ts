@@ -144,6 +144,14 @@ export function getChannelWatermark(channel_id: string): ChannelWatermark {
   return loadWatermarks().channels[channel_id] ?? { channel_watermark: "", last_sweep: 0 };
 }
 
+/** Most-recent last_sweep timestamp across all channels, for the status header. */
+export function lastChannelSweep(): number | null {
+  const all = loadWatermarks().channels;
+  let max = 0;
+  for (const c of Object.values(all)) if (c.last_sweep > max) max = c.last_sweep;
+  return max === 0 ? null : max;
+}
+
 export function getThreadWatermark(channel_id: string, thread_ts: string): ThreadWatermark {
   const key = `${channel_id}:${thread_ts}`;
   return loadWatermarks().threads[key] ?? { thread_watermark: "", last_sweep: 0 };
