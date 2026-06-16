@@ -53,8 +53,10 @@ import { sweepSlack } from "../ingest/slack.js";
 import { StubSlackClient } from "../ingest/slack-adapter.js";
 import { sweepGranola } from "../ingest/granola.js";
 import { StubGranolaClient } from "../ingest/granola-adapter.js";
+import { classifyNote } from "../ingest/classify-note.js";
 import {
   addMeeting,
+  advanceMeetingWatermark,
   listMeetings,
   pauseMeeting,
   removeMeeting,
@@ -384,6 +386,26 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         "Create the directory tree at $MITABLE_HOME/product/ for canonical product knowledge (building blocks, pages) and write a README explaining how to populate it. Idempotent. Does NOT generate content — the Product Manual is intentionally manually authored.",
       inputSchema: { type: "object", properties: {}, additionalProperties: false },
     },
+    {
+      name: "ingest_raw_meeting",
+      description:
+        "Ingest a raw Granola meeting that Claude has already fetched via the Granola MCP. Classifies the note body and writes extractions to the event log. Watermark advances on success so the same meeting isn't re-processed.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          meeting_id: { type: "string", description: "Granola meeting/note ID." },
+          customer_id: { type: "string", description: "Customer this meeting belongs to." },
+          title: { type: "string", description: "Meeting title." },
+          body: { type: "string", description: "Full note body / transcript." },
+          updated_ts: { type: "number", description: "Unix ms timestamp of the note." },
+          attendees: { type: "array", items: { type: "string" }, description: "Optional attendee emails." },
+          permalink: { type: "string", description: "Optional Granola permalink." },
+          dry_run: { type: "boolean", description: "If true, skip classification and just advance watermark." },
+        },
+        required: ["meeting_id", "customer_id", "title", "body", "updated_ts"],
+        additionalProperties: false,
+      },
+    },
   ],
 }));
 
@@ -561,6 +583,41 @@ server.setRequestHandler(CallToolRequestSchema, async (request: CallToolRequest)
       case "scaffold_product_manual":
         return json(scaffoldProductManual());
 
+      case "ingest_raw_meeting": {
+        const meetingId = requireString(args, "meeting_id");
+        const customerId = requireString(args, "customer_id");
+        const title = requireString(args, "title");
+        const body = requireString(args, "body");
+        const updatedTs = typeof args.updated_ts === "number" ? args.updated_ts : Date.now();
+        const dryRun = args.dry_run === true;
+
+        if (dryRun) {
+          advanceMeetingWatermark(meetingId, updatedTs);
+          return json({ meeting_id: meetingId, status: "dry_run", watermark_advanced: true });
+        }
+
+        const classified = await classifyNote({
+          customer_id: customerId,
+          note: {
+            meeting_id: meetingId,
+            updated_ts: updatedTs,
+            title,
+            body,
+            permalink: typeof args.permalink === "string" ? args.permalink : undefined,
+            attendees: Array.isArray(args.attendees) ? args.attendees.filter((a): a is string => typeof a === "string") : undefined,
+          },
+        });
+
+        advanceMeetingWatermark(meetingId, updatedTs);
+
+        return json({
+          meeting_id: meetingId,
+          extractions_written: classified.extractions_written,
+          extractions_rejected: classified.extractions_rejected,
+          rejections: classified.rejections,
+        });
+      }
+
       default:
         return errorText(`unknown tool: ${name}`);
     }
@@ -655,6 +712,7 @@ async function main() {
 
   if (schedulerEnabled()) {
     const handle = startScheduler({
+      granola_client: new StubGranolaClient(),
       on_tick: (r) =>
         process.stderr.write(
           `[mitable] scheduler tick: slack(ch=${r.slack.channels_examined} wr=${r.slack.extractions_written}) granola(mt=${r.granola.meetings_examined} wr=${r.granola.extractions_written}) errs=${r.slack.errors.length + r.granola.errors.length}\n`,
