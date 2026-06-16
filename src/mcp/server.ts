@@ -6,11 +6,17 @@
  *   - brief, seed_fixture, list_customers — milestone 3
  *   - list_pending_classifications,
  *     drain_classifications,
- *     classify_one_session              — milestone 5 (this file)
- *   - sweep_now                         — milestone 6
+ *     classify_one_session              — milestone 5
+ *   - sweep_now, list_channels,
+ *     add_channel, pause_channel,
+ *     resume_channel, remove_channel    — milestone 6 (this file)
  *   - open_command_center               — milestone 8
  *
  * Anything written to stdout is MCP protocol traffic — logs go to stderr.
+ *
+ * The scheduler (in-process 5-min sweep loop) is gated behind
+ * MITABLE_SCHEDULER=1 because the v1 SlackClient is a stub. Enable once a
+ * real Slack adapter is wired.
  */
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
@@ -35,6 +41,16 @@ import {
   type QueueRow,
 } from "../store/classify-queue.js";
 import { classifyTranscript } from "../classify/transcript.js";
+import {
+  addChannel,
+  listChannels,
+  pauseChannel,
+  removeChannel,
+  resumeChannel,
+} from "../store/channel-map.js";
+import { sweepSlack } from "../ingest/slack.js";
+import { StubSlackClient } from "../ingest/slack-adapter.js";
+import { startScheduler, schedulerEnabled } from "../ingest/scheduler.js";
 
 const server = new Server(
   { name: "mitable", version: "0.1.0" },
@@ -161,6 +177,74 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         additionalProperties: false,
       },
     },
+    {
+      name: "list_channels",
+      description:
+        "List Slack channel ↔ customer mappings. Each entry shows whether the channel is currently active (swept) or paused. Read-only.",
+      inputSchema: { type: "object", properties: {}, additionalProperties: false },
+    },
+    {
+      name: "add_channel",
+      description:
+        "Add a Slack channel to the channel map and associate it with a customer. v1: only one customer per channel.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          channel_id: { type: "string", description: "Slack channel ID, e.g. C0123456." },
+          channel_name: { type: "string", description: "Human-readable channel name, e.g. #carver-support." },
+          customer_id: { type: "string", description: "Customer to associate this channel with." },
+        },
+        required: ["channel_id", "channel_name", "customer_id"],
+        additionalProperties: false,
+      },
+    },
+    {
+      name: "pause_channel",
+      description: "Stop sweeping a channel without removing the mapping. Past entries retained.",
+      inputSchema: {
+        type: "object",
+        properties: { channel_id: { type: "string" } },
+        required: ["channel_id"],
+        additionalProperties: false,
+      },
+    },
+    {
+      name: "resume_channel",
+      description: "Resume sweeping a previously paused channel.",
+      inputSchema: {
+        type: "object",
+        properties: { channel_id: { type: "string" } },
+        required: ["channel_id"],
+        additionalProperties: false,
+      },
+    },
+    {
+      name: "remove_channel",
+      description:
+        "Remove a Slack channel from the map. Past extractions stay in the event log; the channel just stops getting swept.",
+      inputSchema: {
+        type: "object",
+        properties: { channel_id: { type: "string" } },
+        required: ["channel_id"],
+        additionalProperties: false,
+      },
+    },
+    {
+      name: "sweep_now",
+      description:
+        "Run the Slack two-phase scan against all active channels (or just this customer's). Useful for testing the pipeline before the scheduler is enabled. v1 ships with a stub SlackClient that returns no new messages — wire a real Slack adapter to see real results.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          customer_id: { type: "string", description: "Limit the sweep to one customer's channels." },
+          dry_run: {
+            type: "boolean",
+            description: "If true, walk the channels and threads but do not classify or write.",
+          },
+        },
+        additionalProperties: false,
+      },
+    },
   ],
 }));
 
@@ -216,6 +300,44 @@ server.setRequestHandler(CallToolRequestSchema, async (request: CallToolRequest)
           results.push(await classifyOne(row, customer));
         }
         return json({ processed: results.length, results });
+      }
+
+      case "list_channels":
+        return json(listChannels());
+
+      case "add_channel": {
+        addChannel({
+          channel_id: requireString(args, "channel_id"),
+          channel_name: requireString(args, "channel_name"),
+          customer_id: requireString(args, "customer_id"),
+        });
+        return text(`added: ${args.channel_id}`);
+      }
+
+      case "pause_channel": {
+        const ok = pauseChannel(requireString(args, "channel_id"));
+        return text(ok ? `paused: ${args.channel_id}` : `not found: ${args.channel_id}`);
+      }
+
+      case "resume_channel": {
+        const ok = resumeChannel(requireString(args, "channel_id"));
+        return text(ok ? `resumed: ${args.channel_id}` : `not found: ${args.channel_id}`);
+      }
+
+      case "remove_channel": {
+        const ok = removeChannel(requireString(args, "channel_id"));
+        return text(ok ? `removed: ${args.channel_id}` : `not found: ${args.channel_id}`);
+      }
+
+      case "sweep_now": {
+        const customer = typeof args.customer_id === "string" ? args.customer_id : undefined;
+        const dryRun = args.dry_run === true;
+        const result = await sweepSlack({
+          client: new StubSlackClient(),
+          customer_id: customer,
+          dry_run: dryRun,
+        });
+        return json(result);
       }
 
       default:
@@ -309,6 +431,20 @@ async function main() {
   const transport = new StdioServerTransport();
   await server.connect(transport);
   process.stderr.write("[mitable] mcp server ready\n");
+
+  if (schedulerEnabled()) {
+    const handle = startScheduler({
+      on_tick: (r) =>
+        process.stderr.write(
+          `[mitable] scheduler tick: channels=${r.channels_examined} written=${r.extractions_written} errors=${r.errors.length}\n`,
+        ),
+      on_error: (err) =>
+        process.stderr.write(`[mitable] scheduler error: ${err instanceof Error ? err.message : err}\n`),
+    });
+    process.on("SIGTERM", () => handle.stop());
+    process.on("SIGINT", () => handle.stop());
+    process.stderr.write("[mitable] scheduler started (MITABLE_SCHEDULER=1)\n");
+  }
 }
 
 main().catch((err) => {

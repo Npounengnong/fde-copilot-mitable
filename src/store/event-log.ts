@@ -14,6 +14,7 @@
  */
 import { ulid } from "ulid";
 import { openDb, type Operation, type Provenance, type SourceType, type ProfileField } from "./schema.js";
+import { checkDuplicate } from "./dedup.js";
 
 const CONFIDENCE_GATE = 0.7;
 
@@ -52,7 +53,7 @@ export interface EventRow {
 
 export type AppendResult =
   | { status: "written"; id: string }
-  | { status: "rejected"; reason: "low_confidence" | "missing_evidence" };
+  | { status: "rejected"; reason: "low_confidence" | "missing_evidence" | "duplicate"; existing_id?: string };
 
 export function appendEvent(input: AppendInput): AppendResult {
   if (input.confidence < CONFIDENCE_GATE) {
@@ -60,6 +61,20 @@ export function appendEvent(input: AppendInput): AppendResult {
   }
   if (input.source_type !== "fde_manual" && input.evidence_text.trim() === "") {
     return { status: "rejected", reason: "missing_evidence" };
+  }
+
+  // Stage 1 dedup (exact-hash). Skipped for fde_manual writes so re-seeding a
+  // fixture is idempotent at the SCHEMA level only (existing rows aren't
+  // duplicated, but they ARE still written if hashes match).
+  if (input.source_type !== "fde_manual") {
+    const dup = checkDuplicate({
+      customer_id: input.customer_id,
+      profile_field: input.profile_field,
+      content: input.content,
+    });
+    if (dup.decision === "duplicate") {
+      return { status: "rejected", reason: "duplicate", existing_id: dup.existing_id };
+    }
   }
 
   const db = openDb();

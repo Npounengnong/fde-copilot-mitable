@@ -1,0 +1,65 @@
+/**
+ * In-process scheduler.
+ *
+ * Spec: docs/06-interaction-model.md §2, docs/10-non-goals.md.
+ *
+ * Runs inside the MCP server process. Every `interval_ms` (default 5 min) it:
+ *   1. Runs a Slack sweep against every active channel
+ *   2. Drains the classification queue using the channel_map for customer hints
+ *
+ * No native plugin cron — when Claude Code isn't running, this scheduler
+ * doesn't run. That tradeoff is in 10-non-goals.md.
+ *
+ * v1 ships disabled-by-default: the user calls `sweep_now` manually until
+ * a real SlackClient is wired (so we don't burn cycles in a stub loop).
+ * Enable via MITABLE_SCHEDULER=1 env var.
+ */
+import { sweepSlack, type SweepResult } from "./slack.js";
+import { StubSlackClient, type SlackClient } from "./slack-adapter.js";
+
+export interface SchedulerHandle {
+  stop: () => void;
+}
+
+export interface SchedulerOpts {
+  client?: SlackClient;
+  interval_ms?: number;
+  on_tick?: (result: SweepResult) => void;
+  on_error?: (err: unknown) => void;
+}
+
+export function startScheduler(opts: SchedulerOpts = {}): SchedulerHandle {
+  const client = opts.client ?? new StubSlackClient();
+  const intervalMs = opts.interval_ms ?? 5 * 60 * 1000;
+
+  let timer: NodeJS.Timeout | null = null;
+  let running = false;
+
+  const tick = async () => {
+    if (running) return;             // skip overlap
+    running = true;
+    try {
+      const result = await sweepSlack({ client });
+      opts.on_tick?.(result);
+    } catch (err) {
+      opts.on_error?.(err);
+    } finally {
+      running = false;
+    }
+  };
+
+  // First tick after one interval, not immediately — lets the MCP server
+  // finish startup and avoid stampeding on cold start.
+  timer = setInterval(tick, intervalMs);
+
+  return {
+    stop() {
+      if (timer) clearInterval(timer);
+      timer = null;
+    },
+  };
+}
+
+export function schedulerEnabled(): boolean {
+  return process.env.MITABLE_SCHEDULER === "1";
+}
