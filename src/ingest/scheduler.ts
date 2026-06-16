@@ -16,31 +16,41 @@
  */
 import { sweepSlack, type SweepResult } from "./slack.js";
 import { StubSlackClient, type SlackClient } from "./slack-adapter.js";
+import { sweepGranola, type GranolaSweepResult } from "./granola.js";
+import { StubGranolaClient, type GranolaClient } from "./granola-adapter.js";
 
 export interface SchedulerHandle {
   stop: () => void;
 }
 
+export interface CombinedSweepResult {
+  slack: SweepResult;
+  granola: GranolaSweepResult;
+}
+
 export interface SchedulerOpts {
-  client?: SlackClient;
+  slack_client?: SlackClient;
+  granola_client?: GranolaClient;
   interval_ms?: number;
-  on_tick?: (result: SweepResult) => void;
+  on_tick?: (result: CombinedSweepResult) => void;
   on_error?: (err: unknown) => void;
 }
 
 export function startScheduler(opts: SchedulerOpts = {}): SchedulerHandle {
-  const client = opts.client ?? new StubSlackClient();
+  const slackClient = opts.slack_client ?? new StubSlackClient();
+  const granolaClient = opts.granola_client ?? new StubGranolaClient();
   const intervalMs = opts.interval_ms ?? 5 * 60 * 1000;
 
   let timer: NodeJS.Timeout | null = null;
   let running = false;
 
   const tick = async () => {
-    if (running) return;             // skip overlap
+    if (running) return; // skip overlap
     running = true;
     try {
-      const result = await sweepSlack({ client });
-      opts.on_tick?.(result);
+      const slack = await sweepSlack({ client: slackClient });
+      const granola = await sweepGranola({ client: granolaClient });
+      opts.on_tick?.({ slack, granola });
     } catch (err) {
       opts.on_error?.(err);
     } finally {

@@ -50,6 +50,15 @@ import {
 } from "../store/channel-map.js";
 import { sweepSlack } from "../ingest/slack.js";
 import { StubSlackClient } from "../ingest/slack-adapter.js";
+import { sweepGranola } from "../ingest/granola.js";
+import { StubGranolaClient } from "../ingest/granola-adapter.js";
+import {
+  addMeeting,
+  listMeetings,
+  pauseMeeting,
+  removeMeeting,
+  resumeMeeting,
+} from "../store/granola-map.js";
 import { startScheduler, schedulerEnabled } from "../ingest/scheduler.js";
 
 const server = new Server(
@@ -232,16 +241,72 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: "sweep_now",
       description:
-        "Run the Slack two-phase scan against all active channels (or just this customer's). Useful for testing the pipeline before the scheduler is enabled. v1 ships with a stub SlackClient that returns no new messages — wire a real Slack adapter to see real results.",
+        "Run a sweep across all background sources (Slack channels + Granola meetings) for one customer or all customers. Useful for testing the pipeline before the scheduler is enabled. v1 ships with stub clients that return no new content — wire real adapters to see real results.",
       inputSchema: {
         type: "object",
         properties: {
-          customer_id: { type: "string", description: "Limit the sweep to one customer's channels." },
+          customer_id: { type: "string", description: "Limit the sweep to one customer's sources." },
           dry_run: {
             type: "boolean",
-            description: "If true, walk the channels and threads but do not classify or write.",
+            description: "If true, walk the sources but do not classify or write.",
           },
         },
+        additionalProperties: false,
+      },
+    },
+    {
+      name: "list_meetings",
+      description:
+        "List Granola meeting ↔ customer mappings. Read-only.",
+      inputSchema: { type: "object", properties: {}, additionalProperties: false },
+    },
+    {
+      name: "add_meeting",
+      description:
+        "Map a Granola meeting (or calendar event) to a customer. Used for assigning recurring meetings whose attendee heuristic isn't sufficient.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          meeting_id: { type: "string", description: "Granola meeting or calendar-event ID." },
+          title: { type: "string", description: "Human-readable title, e.g. 'Carver weekly sync'." },
+          customer_id: { type: "string" },
+          type: {
+            type: "string",
+            enum: ["meeting", "calendar_event"],
+            description: "Defaults to 'meeting'.",
+          },
+        },
+        required: ["meeting_id", "title", "customer_id"],
+        additionalProperties: false,
+      },
+    },
+    {
+      name: "pause_meeting",
+      description: "Stop sweeping a meeting without removing the mapping.",
+      inputSchema: {
+        type: "object",
+        properties: { meeting_id: { type: "string" } },
+        required: ["meeting_id"],
+        additionalProperties: false,
+      },
+    },
+    {
+      name: "resume_meeting",
+      description: "Resume sweeping a paused meeting.",
+      inputSchema: {
+        type: "object",
+        properties: { meeting_id: { type: "string" } },
+        required: ["meeting_id"],
+        additionalProperties: false,
+      },
+    },
+    {
+      name: "remove_meeting",
+      description: "Remove a meeting mapping. Past extractions stay in the event log.",
+      inputSchema: {
+        type: "object",
+        properties: { meeting_id: { type: "string" } },
+        required: ["meeting_id"],
         additionalProperties: false,
       },
     },
@@ -332,12 +397,45 @@ server.setRequestHandler(CallToolRequestSchema, async (request: CallToolRequest)
       case "sweep_now": {
         const customer = typeof args.customer_id === "string" ? args.customer_id : undefined;
         const dryRun = args.dry_run === true;
-        const result = await sweepSlack({
+        const slack = await sweepSlack({
           client: new StubSlackClient(),
           customer_id: customer,
           dry_run: dryRun,
         });
-        return json(result);
+        const granola = await sweepGranola({
+          client: new StubGranolaClient(),
+          customer_id: customer,
+          dry_run: dryRun,
+        });
+        return json({ slack, granola });
+      }
+
+      case "list_meetings":
+        return json(listMeetings());
+
+      case "add_meeting": {
+        addMeeting({
+          meeting_id: requireString(args, "meeting_id"),
+          title: requireString(args, "title"),
+          customer_id: requireString(args, "customer_id"),
+          type: args.type === "calendar_event" ? "calendar_event" : "meeting",
+        });
+        return text(`added: ${args.meeting_id}`);
+      }
+
+      case "pause_meeting": {
+        const ok = pauseMeeting(requireString(args, "meeting_id"));
+        return text(ok ? `paused: ${args.meeting_id}` : `not found: ${args.meeting_id}`);
+      }
+
+      case "resume_meeting": {
+        const ok = resumeMeeting(requireString(args, "meeting_id"));
+        return text(ok ? `resumed: ${args.meeting_id}` : `not found: ${args.meeting_id}`);
+      }
+
+      case "remove_meeting": {
+        const ok = removeMeeting(requireString(args, "meeting_id"));
+        return text(ok ? `removed: ${args.meeting_id}` : `not found: ${args.meeting_id}`);
       }
 
       default:
@@ -436,7 +534,7 @@ async function main() {
     const handle = startScheduler({
       on_tick: (r) =>
         process.stderr.write(
-          `[mitable] scheduler tick: channels=${r.channels_examined} written=${r.extractions_written} errors=${r.errors.length}\n`,
+          `[mitable] scheduler tick: slack(ch=${r.slack.channels_examined} wr=${r.slack.extractions_written}) granola(mt=${r.granola.meetings_examined} wr=${r.granola.extractions_written}) errs=${r.slack.errors.length + r.granola.errors.length}\n`,
         ),
       on_error: (err) =>
         process.stderr.write(`[mitable] scheduler error: ${err instanceof Error ? err.message : err}\n`),
