@@ -54,11 +54,12 @@ The `add_note` tool writes directly to the event log under `fde_manual` provenan
 
 The auto-ingestion path is wired and tested end-to-end (`/mitable` no-arg → Sources → add channel/meeting → 5-min scheduler).
 
-*Granola (real adapter — v0.2):*
-1. Generate an API key in the Granola app: Settings → Connectors → API Keys
-2. In a Claude Code session, run: `set_granola_token({"token": "grn_..."})`
-3. Set `MITABLE_GRANOLA_ADAPTER=real` to enable the real adapter (stub stays default for tests)
-4. Enable the scheduler with `MITABLE_SCHEDULER=1`
+*Granola (Architecture B — Claude fetches via MCP):*
+1. Install the Granola MCP in Claude: `claude mcp add granola --transport http https://mcp.granola.ai/mcp`
+2. Authorize Claude with Granola (one-time OAuth)
+3. When a conversation needs Granola data, Claude calls the Granola MCP to fetch meetings
+4. Claude then calls Mitable's `ingest_raw_meeting` tool to store what it found
+5. Mitable classifies and writes to the event log automatically
 
 *Slack:* still ships with a stub. See Workstream A in [docs/workstreams-next.md](docs/workstreams-next.md).
 
@@ -107,7 +108,7 @@ src/
   mcp/server.ts              MCP server: ~22 tools
   store/                     SQLite event log, dedup, channel + meeting maps
   ingest/                    Slack + Granola scan paths, scheduler
-    granola-real.ts          real Granola REST API adapter (v0.2)
+    ingest_raw_meeting       MCP tool for Claude to push Granola data
   classify/transcript.ts     session transcript classifier (claude -p)
   assembly/                  work-mode weights + brief renderer
   playbook/, product/        Layer 2 + Layer 3 loaders

@@ -53,10 +53,10 @@ import { sweepSlack } from "../ingest/slack.js";
 import { StubSlackClient } from "../ingest/slack-adapter.js";
 import { sweepGranola } from "../ingest/granola.js";
 import { StubGranolaClient } from "../ingest/granola-adapter.js";
-import { RealGranolaClient } from "../ingest/granola-real.js";
-import { saveGranolaAuth } from "../store/granola-auth.js";
+import { classifyNote } from "../ingest/classify-note.js";
 import {
   addMeeting,
+  advanceMeetingWatermark,
   listMeetings,
   pauseMeeting,
   removeMeeting,
@@ -387,18 +387,22 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       inputSchema: { type: "object", properties: {}, additionalProperties: false },
     },
     {
-      name: "set_granola_token",
+      name: "ingest_raw_meeting",
       description:
-        "Store the user's Granola API key so the real Granola adapter can fetch meeting notes. The user generates this key in the Granola app (Settings -> Connectors -> API Keys). Key format: grn_...",
+        "Ingest a raw Granola meeting that Claude has already fetched via the Granola MCP. Classifies the note body and writes extractions to the event log. Watermark advances on success so the same meeting isn't re-processed.",
       inputSchema: {
         type: "object",
         properties: {
-          token: {
-            type: "string",
-            description: "Granola API key, e.g. grn_abc123. Must start with 'grn_'.",
-          },
+          meeting_id: { type: "string", description: "Granola meeting/note ID." },
+          customer_id: { type: "string", description: "Customer this meeting belongs to." },
+          title: { type: "string", description: "Meeting title." },
+          body: { type: "string", description: "Full note body / transcript." },
+          updated_ts: { type: "number", description: "Unix ms timestamp of the note." },
+          attendees: { type: "array", items: { type: "string" }, description: "Optional attendee emails." },
+          permalink: { type: "string", description: "Optional Granola permalink." },
+          dry_run: { type: "boolean", description: "If true, skip classification and just advance watermark." },
         },
-        required: ["token"],
+        required: ["meeting_id", "customer_id", "title", "body", "updated_ts"],
         additionalProperties: false,
       },
     },
@@ -532,9 +536,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request: CallToolRequest)
           customer_id: customer,
           dry_run: dryRun,
         });
-        const granolaClient = process.env.MITABLE_GRANOLA_ADAPTER === "real" ? new RealGranolaClient() : new StubGranolaClient();
         const granola = await sweepGranola({
-          client: granolaClient,
+          client: new StubGranolaClient(),
           customer_id: customer,
           dry_run: dryRun,
         });
@@ -580,13 +583,39 @@ server.setRequestHandler(CallToolRequestSchema, async (request: CallToolRequest)
       case "scaffold_product_manual":
         return json(scaffoldProductManual());
 
-      case "set_granola_token": {
-        const token = requireString(args, "token");
-        if (!token.startsWith("grn_")) {
-          return errorText("Token must start with 'grn_'. Get yours from Granola -> Settings -> Connectors -> API Keys.");
+      case "ingest_raw_meeting": {
+        const meetingId = requireString(args, "meeting_id");
+        const customerId = requireString(args, "customer_id");
+        const title = requireString(args, "title");
+        const body = requireString(args, "body");
+        const updatedTs = typeof args.updated_ts === "number" ? args.updated_ts : Date.now();
+        const dryRun = args.dry_run === true;
+
+        if (dryRun) {
+          advanceMeetingWatermark(meetingId, updatedTs);
+          return json({ meeting_id: meetingId, status: "dry_run", watermark_advanced: true });
         }
-        saveGranolaAuth(token);
-        return text("Granola token stored. Run sweep_now to test.");
+
+        const classified = await classifyNote({
+          customer_id: customerId,
+          note: {
+            meeting_id: meetingId,
+            updated_ts: updatedTs,
+            title,
+            body,
+            permalink: typeof args.permalink === "string" ? args.permalink : undefined,
+            attendees: Array.isArray(args.attendees) ? args.attendees.filter((a): a is string => typeof a === "string") : undefined,
+          },
+        });
+
+        advanceMeetingWatermark(meetingId, updatedTs);
+
+        return json({
+          meeting_id: meetingId,
+          extractions_written: classified.extractions_written,
+          extractions_rejected: classified.extractions_rejected,
+          rejections: classified.rejections,
+        });
       }
 
       default:
@@ -682,9 +711,8 @@ async function main() {
   process.stderr.write("[mitable] mcp server ready\n");
 
   if (schedulerEnabled()) {
-    const granolaClient = process.env.MITABLE_GRANOLA_ADAPTER === "real" ? new RealGranolaClient() : new StubGranolaClient();
     const handle = startScheduler({
-      granola_client: granolaClient,
+      granola_client: new StubGranolaClient(),
       on_tick: (r) =>
         process.stderr.write(
           `[mitable] scheduler tick: slack(ch=${r.slack.channels_examined} wr=${r.slack.extractions_written}) granola(mt=${r.granola.meetings_examined} wr=${r.granola.extractions_written}) errs=${r.slack.errors.length + r.granola.errors.length}\n`,
