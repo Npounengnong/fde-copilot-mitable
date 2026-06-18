@@ -103,7 +103,7 @@ If nothing in the note is worth extracting, return {"extractions": []}.
 
 export async function classifyNote(input: NoteClassifyInput): Promise<NoteClassifyResult> {
   const raw = await runClaudeP({
-    bin: input.claude_bin ?? "claude",
+    bin: input.claude_bin ?? process.env.MITABLE_CLAUDE_BIN ?? "claude",
     systemPrompt: SYSTEM_PROMPT,
     userPrompt: buildUserPrompt(input.note),
     timeoutMs: input.timeout_ms ?? 120_000,
@@ -140,8 +140,8 @@ interface RunOpts {
 
 async function runClaudeP(opts: RunOpts): Promise<string> {
   return new Promise((resolve, reject) => {
-    const args = ["-p", "--system-prompt", opts.systemPrompt, "--output-format", "text"];
-    const child = spawn(opts.bin, args, { stdio: ["pipe", "pipe", "pipe"] });
+    const args = ["-p", "--output-format", "text"];
+    const child = spawn(opts.bin, args, { stdio: ["pipe", "pipe", "pipe"], shell: opts.bin.endsWith(".cmd") });
     let stdout = "";
     let stderr = "";
     const timer = setTimeout(() => {
@@ -168,7 +168,9 @@ async function runClaudeP(opts: RunOpts): Promise<string> {
       resolve(stdout);
     });
 
-    child.stdin.write(opts.userPrompt);
+    // Embed system prompt in stdin so it's not subject to CLI flag parsing quirks
+    const fullInput = `<system>\n${opts.systemPrompt}\n</system>\n\n${opts.userPrompt}`;
+    child.stdin.write(fullInput);
     child.stdin.end();
   });
 }
